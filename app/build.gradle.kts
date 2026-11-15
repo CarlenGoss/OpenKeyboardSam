@@ -55,7 +55,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(libs.androidx.autofill)
-    implementation(libs.kotlinx.coroutines-android)
+    implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit)
 }
