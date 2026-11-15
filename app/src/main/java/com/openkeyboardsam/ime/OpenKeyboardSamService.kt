@@ -4,6 +4,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.os.Bundle
@@ -17,7 +19,6 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InlineSuggestionsRequest
 import android.view.inputmethod.InlineSuggestionsResponse
-import android.widget.Button
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -36,6 +37,7 @@ import com.openkeyboardsam.core.keyboard.model.KeyboardTheme
 import com.openkeyboardsam.core.keyboard.model.LayoutSizingMode
 import com.openkeyboardsam.core.keyboard.model.ShiftState
 import com.openkeyboardsam.core.keyboard.view.OneUiKeyboardView
+import com.openkeyboardsam.core.keyboard.view.OneUiToolbarView
 import com.openkeyboardsam.core.nlp.NlpEngine
 import com.openkeyboardsam.feature.ai.AiResult
 import com.openkeyboardsam.feature.ai.GeminiWritingAssistant
@@ -53,15 +55,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Main InputMethodService for OpenKeyboardSam.
- * Features:
- * - Zero-allocation Canvas One UI keyboard + Keys Cafe height & One-handed modes
- * - Native C++17 mmap NLP dictionary (ES/EN) + inline expression calculator
- * - Interactive S Pen Handwriting Canvas (Galaxy S22 Ultra)
- * - Android 11+ Autofill Inline Suggestions (Samsung Pass / Wallet)
- * - Persistent SQLite Clipboard + Gemini AI Writing Assist
+ * Main InputMethodService for OpenKeyboardSam (One UI 6.1 Edition).
  */
-class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener {
+class OpenKeyboardSamService :
+    InputMethodService(),
+    OneUiKeyboardView.Listener,
+    OneUiToolbarView.Listener {
 
     private lateinit var prefs: KeyboardPreferences
     private lateinit var nlpEngine: NlpEngine
@@ -70,7 +69,8 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private var rootContainer: LinearLayout? = null
-    private var topBarContainer: LinearLayout? = null
+    private var autofillStripContainer: LinearLayout? = null
+    private var toolbarView: OneUiToolbarView? = null
     private var secondaryPanelContainer: LinearLayout? = null
     private var keyboardView: OneUiKeyboardView? = null
 
@@ -113,14 +113,20 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
             )
         }
 
-        val topBar = LinearLayout(this).apply {
+        val autofillStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            visibility = View.GONE
             gravity = Gravity.CENTER_VERTICAL
-            setPadding((6 * density).toInt(), (4 * density).toInt(), (6 * density).toInt(), (4 * density).toInt())
+            setPadding((6 * density).toInt(), (2 * density).toInt(), (6 * density).toInt(), (2 * density).toInt())
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                (42 * density).toInt()
+                (40 * density).toInt()
             )
+        }
+
+        val tbView = OneUiToolbarView(this).apply {
+            listener = this@OpenKeyboardSamService
+            applyTheme(theme)
         }
 
         val secondaryPanel = LinearLayout(this).apply {
@@ -128,7 +134,7 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
             visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                (215 * density).toInt()
+                (235 * density).toInt()
             )
         }
 
@@ -142,17 +148,18 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
             applyTheme(theme)
         }
 
-        root.addView(topBar)
+        root.addView(autofillStrip)
+        root.addView(tbView)
         root.addView(secondaryPanel)
         root.addView(kbView)
 
         rootContainer = root
-        topBarContainer = topBar
+        autofillStripContainer = autofillStrip
+        toolbarView = tbView
         secondaryPanelContainer = secondaryPanel
         keyboardView = kbView
 
         refreshKeyboardLayout()
-        showToolbarActions()
         return root
     }
 
@@ -161,6 +168,13 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
         currentWord.clear()
         val theme = resolveTheme()
         rootContainer?.setBackgroundColor(theme.backgroundColor)
+        autofillStripContainer?.visibility = View.GONE
+        toolbarView?.apply {
+            visibility = View.VISIBLE
+            applyTheme(theme)
+            setSuggestions(emptyList())
+            setActiveAction(null)
+        }
         keyboardView?.apply {
             hapticEnabled = prefs.hapticEnabled
             showAltLabels = prefs.showAltLabels
@@ -175,7 +189,6 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
         }
         updateAutoCapitalization()
         refreshKeyboardLayout()
-        showToolbarActions()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -201,12 +214,12 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
         super.onDestroy()
     }
 
-    // --- Android 11+ Autofill Inline Suggestions (Samsung Pass / Wallet / Bitwarden) ---
+    // --- Android 11+ Autofill Inline Suggestions (Samsung Pass / Wallet) ---
     @RequiresApi(Build.VERSION_CODES.R)
     override fun onCreateInlineSuggestionsRequest(uiExtras: Bundle): InlineSuggestionsRequest? {
         val density = resources.displayMetrics.density
-        val minSize = Size((64 * density).toInt(), (36 * density).toInt())
-        val maxSize = Size((220 * density).toInt(), (40 * density).toInt())
+        val minSize = Size((64 * density).toInt(), (34 * density).toInt())
+        val maxSize = Size((220 * density).toInt(), (38 * density).toInt())
         val style = InlineSuggestionUi.newStyleBuilder().build()
         val spec = InlinePresentationSpec.Builder(minSize, maxSize)
             .setStyle(UiVersions.newStylesBuilder().addStyle(style).build())
@@ -219,9 +232,15 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
     @RequiresApi(Build.VERSION_CODES.R)
     override fun onInlineSuggestionsResponse(response: InlineSuggestionsResponse): Boolean {
         val suggestions = response.inlineSuggestions
-        if (suggestions.isEmpty()) return false
-        val bar = topBarContainer ?: return false
-        bar.removeAllViews()
+        val strip = autofillStripContainer ?: return false
+        if (suggestions.isEmpty()) {
+            strip.visibility = View.GONE
+            toolbarView?.visibility = View.VISIBLE
+            return false
+        }
+        strip.removeAllViews()
+        strip.visibility = View.VISIBLE
+        toolbarView?.visibility = View.GONE
 
         val scroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -238,8 +257,39 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
             }
         }
         scroll.addView(row)
-        bar.addView(scroll)
+        strip.addView(scroll)
         return true
+    }
+
+    // --- OneUiToolbarView.Listener ---
+    override fun onActionClicked(action: OneUiToolbarView.Action) {
+        when (action) {
+            OneUiToolbarView.Action.GALAXY_AI -> toggleAiPanel()
+            OneUiToolbarView.Action.EMOJI -> toggleEmojiPanel()
+            OneUiToolbarView.Action.CLIPBOARD -> toggleClipboardPanel()
+            OneUiToolbarView.Action.SPEN -> toggleSPenPanel()
+            OneUiToolbarView.Action.VOICE -> triggerVoiceInput()
+            OneUiToolbarView.Action.ONE_HANDED -> cycleOneHandedMode()
+            OneUiToolbarView.Action.SETTINGS -> {
+                val intent = Intent(this, SettingsActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+            }
+        }
+    }
+
+    override fun onSuggestionClicked(word: String) {
+        val ic = currentInputConnection ?: return
+        val prefix = currentWord.toString()
+        if (prefix.isNotEmpty()) {
+            ic.deleteSurroundingText(prefix.length, 0)
+        }
+        ic.commitText("$word ", 1)
+        nlpEngine.learnWord(word)
+        currentWord.clear()
+        toolbarView?.setSuggestions(emptyList())
+        updateAutoCapitalization()
     }
 
     // --- OneUiKeyboardView.Listener ---
@@ -366,7 +416,7 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
             ic.deleteSurroundingText(count, 0)
             currentWord.clear()
             updateAutoCapitalization()
-            showToolbarActions()
+            toolbarView?.setSuggestions(emptyList())
         }
     }
 
@@ -391,7 +441,7 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
             shiftState = ShiftState.OFF
             keyboardView?.updateShiftState(shiftState)
         }
-        showToolbarActions()
+        toolbarView?.setSuggestions(emptyList())
     }
 
     private fun updateAutoCapitalization() {
@@ -415,7 +465,7 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
             nlpEngine.learnWord(currentWord.toString())
             currentWord.clear()
         }
-        showToolbarActions()
+        toolbarView?.setSuggestions(emptyList())
     }
 
     private fun switchLanguage() {
@@ -423,8 +473,6 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
         prefs.language = currentLanguage
         nlpEngine.loadLanguage(currentLanguage.code)
         refreshKeyboardLayout()
-        showToolbarActions()
-        Toast.makeText(this, currentLanguage.displayName, Toast.LENGTH_SHORT).show()
     }
 
     private fun refreshKeyboardLayout() {
@@ -435,73 +483,14 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
     private fun updateSuggestionsBar() {
         val prefix = currentWord.toString()
         if (prefix.isEmpty()) {
-            showToolbarActions()
+            toolbarView?.setSuggestions(emptyList())
             return
         }
-        val bar = topBarContainer ?: return
-        bar.removeAllViews()
-        val theme = resolveTheme()
-        val suggestions = nlpEngine.predict(prefix, 3)
-
-        if (suggestions.isEmpty()) {
-            showToolbarActions()
-            return
+        val raw = nlpEngine.predict(prefix, 3)
+        val formatted = raw.map { word ->
+            if (prefix[0].isUpperCase()) word.replaceFirstChar { it.uppercase() } else word
         }
-
-        for (word in suggestions) {
-            val formatted = if (prefix[0].isUpperCase()) {
-                word.replaceFirstChar { it.uppercase() }
-            } else {
-                word
-            }
-            val btn = TextView(this).apply {
-                text = formatted
-                gravity = Gravity.CENTER
-                textSize = 15f
-                setTextColor(theme.keyTextColor)
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-                setOnClickListener {
-                    val ic = currentInputConnection ?: return@setOnClickListener
-                    ic.deleteSurroundingText(prefix.length, 0)
-                    ic.commitText("$formatted ", 1)
-                    nlpEngine.learnWord(word)
-                    currentWord.clear()
-                    showToolbarActions()
-                }
-            }
-            bar.addView(btn)
-        }
-    }
-
-    private fun showToolbarActions() {
-        val bar = topBarContainer ?: return
-        bar.removeAllViews()
-        val theme = resolveTheme()
-
-        fun actionButton(label: String, onClick: () -> Unit): TextView {
-            return TextView(this).apply {
-                text = label
-                gravity = Gravity.CENTER
-                textSize = 14f
-                setTextColor(theme.keyTextColor)
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-                setOnClickListener { onClick() }
-            }
-        }
-
-        bar.addView(actionButton("✨ IA") { toggleAiPanel() })
-        bar.addView(actionButton("✍️ S Pen") { toggleSPenPanel() })
-        bar.addView(actionButton("📋") { toggleClipboardPanel() })
-        bar.addView(actionButton("☺") { toggleEmojiPanel() })
-        bar.addView(actionButton("🎤") { triggerVoiceInput() })
-        bar.addView(actionButton("📐") { cycleOneHandedMode() })
-        bar.addView(actionButton(currentLanguage.code.uppercase()) { switchLanguage() })
-        bar.addView(actionButton("⚙") {
-            val intent = Intent(this, SettingsActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-        })
+        toolbarView?.setSuggestions(formatted)
     }
 
     private fun cycleOneHandedMode() {
@@ -515,6 +504,46 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
         keyboardView?.sizingMode = next
     }
 
+    // --- Styled One UI Panels ---
+
+    private fun createRoundedCard(bgColor: Int, cornerDp: Float = 14f, strokeColor: Int? = null): GradientDrawable {
+        val d = resources.displayMetrics.density
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = cornerDp * d
+            setColor(bgColor)
+            if (strokeColor != null) {
+                setStroke((1f * d).toInt(), strokeColor)
+            }
+        }
+    }
+
+    private fun createPanelHeader(title: String, theme: KeyboardTheme): View {
+        val d = resources.displayMetrics.density
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding((14 * d).toInt(), (8 * d).toInt(), (14 * d).toInt(), (6 * d).toInt())
+
+            addView(TextView(context).apply {
+                text = title
+                textSize = 14f
+                typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                setTextColor(theme.keyTextColor)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+
+            addView(TextView(context).apply {
+                text = "⌨️ Teclado"
+                textSize = 12.5f
+                setTextColor(theme.accentKeyColor)
+                background = createRoundedCard(theme.keyColor, 16f)
+                setPadding((12 * d).toInt(), (5 * d).toInt(), (12 * d).toInt(), (5 * d).toInt())
+                setOnClickListener { closeSecondaryPanel() }
+            })
+        }
+    }
+
     private fun toggleSPenPanel() {
         val panel = secondaryPanelContainer ?: return
         if (panel.visibility == View.VISIBLE && panel.tag == "spen") {
@@ -525,38 +554,45 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
         panel.tag = "spen"
         panel.visibility = View.VISIBLE
         keyboardView?.visibility = View.GONE
+        toolbarView?.setActiveAction(OneUiToolbarView.Action.SPEN)
 
         val theme = resolveTheme()
-        val density = resources.displayMetrics.density
+        val d = resources.displayMetrics.density
+        panel.addView(createPanelHeader("✍️ Escritura a mano con S Pen", theme))
+
+        val padContainer = LinearLayout(this).apply {
+            background = createRoundedCard(theme.keyColor, 16f, theme.popupBorderColor)
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                (175 * d).toInt()
+            )
+            lp.setMargins((10 * d).toInt(), (4 * d).toInt(), (10 * d).toInt(), (8 * d).toInt())
+            layoutParams = lp
+        }
+
         val pad = SPenHandwritingView(this).apply {
             setThemeColors(theme.accentKeyColor, theme.altTextColor)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                (165 * density).toInt()
+                ViewGroup.LayoutParams.MATCH_PARENT
             )
             listener = object : SPenHandwritingView.Listener {
                 override fun onRecognizedText(text: String) {
                     currentInputConnection?.commitText(text, 1)
                 }
-
                 override fun onSpaceRequested() {
                     currentInputConnection?.commitText(" ", 1)
                 }
-
                 override fun onBackspaceRequested() {
                     currentInputConnection?.deleteSurroundingText(1, 0)
                 }
-
                 override fun onCloseRequested() {
                     closeSecondaryPanel()
                 }
             }
         }
-        panel.addView(pad)
-        panel.addView(Button(this).apply {
-            text = "Volver al teclado QWERTY"
-            setOnClickListener { closeSecondaryPanel() }
-        })
+        padContainer.addView(pad)
+        panel.addView(padContainer)
     }
 
     private fun toggleEmojiPanel() {
@@ -569,18 +605,24 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
         panel.tag = "emoji"
         panel.visibility = View.VISIBLE
         keyboardView?.visibility = View.GONE
+        toolbarView?.setActiveAction(OneUiToolbarView.Action.EMOJI)
+
+        val theme = resolveTheme()
+        val d = resources.displayMetrics.density
+        panel.addView(createPanelHeader("😊 Emojis y Símbolos", theme))
 
         val emojis = listOf(
-            "😀", "😂", "🥹", "😍", "🥰", "😎", "🤔", "🙌",
-            "👍", "👏", "🔥", "✨", "❤️", "💯", "🎉", "🙏",
-            "😅", "😭", "🤯", "🫡", "🤝", "⚡", "🚀", "✅",
-            "🇲🇽", "🇪🇸", "🇦🇷", "🇨🇴", "🇺🇲", "📱", "💻", "🎧"
+            "😀", "😂", "🤣", "🥹", "😍", "🥰", "😘", "😎",
+            "🤔", "🫡", "🙌", "👍", "👏", "🙏", "🔥", "✨",
+            "❤️", "🩷", "💯", "🎉", "🥳", "🤩", "😅", "😭",
+            "🤯", "😡", "🤝", "💪", "⚡", "🚀", "✅", "❌",
+            "🌟", "💎", "🎵", "📸", "📱", "💻", "⌚", "☕",
+            "🇲🇽", "🇪🇸", "🇦🇷", "🇨🇴", "🇨🇱", "🇵🇪", "🇻🇪", "🇺🇸"
         )
         val grid = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(16, 12, 16, 12)
+            setPadding((10 * d).toInt(), (4 * d).toInt(), (10 * d).toInt(), (10 * d).toInt())
         }
-        val theme = resolveTheme()
         for (chunk in emojis.chunked(8)) {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -592,9 +634,9 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
             for (emoji in chunk) {
                 val tv = TextView(this).apply {
                     text = emoji
-                    textSize = 22f
+                    textSize = 23f
                     gravity = Gravity.CENTER
-                    setPadding(6, 12, 6, 12)
+                    setPadding(4, (8 * d).toInt(), 4, (8 * d).toInt())
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     setOnClickListener { currentInputConnection?.commitText(emoji, 1) }
                 }
@@ -602,12 +644,6 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
             }
             grid.addView(row)
         }
-        val backBtn = Button(this).apply {
-            text = "Volver al teclado"
-            setTextColor(theme.keyTextColor)
-            setOnClickListener { closeSecondaryPanel() }
-        }
-        grid.addView(backBtn)
         panel.addView(ScrollView(this).apply { addView(grid) })
     }
 
@@ -621,26 +657,39 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
         panel.tag = "clipboard"
         panel.visibility = View.VISIBLE
         keyboardView?.visibility = View.GONE
+        toolbarView?.setActiveAction(OneUiToolbarView.Action.CLIPBOARD)
 
         val theme = resolveTheme()
+        val d = resources.displayMetrics.density
+        panel.addView(createPanelHeader("📋 Portapapeles One UI (mantén para fijar 📌)", theme))
+
         val list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(16, 12, 16, 12)
+            setPadding((12 * d).toInt(), (4 * d).toInt(), (12 * d).toInt(), (12 * d).toInt())
         }
-        val clips = clipboardRepo.getRecentClips(20)
+        val clips = clipboardRepo.getRecentClips(24)
         if (clips.isEmpty()) {
             list.addView(TextView(this).apply {
-                text = "Portapapeles vacío (copia cualquier texto para guardarlo aquí)"
+                text = "El portapapeles está vacío.\nLos textos que copies aparecerán aquí como tarjetas."
+                gravity = Gravity.CENTER
                 setTextColor(theme.altTextColor)
-                setPadding(12, 24, 12, 24)
+                textSize = 13.5f
+                setPadding(24, (36 * d).toInt(), 24, (36 * d).toInt())
             })
         } else {
             for (clip in clips) {
-                val row = TextView(this).apply {
-                    text = (if (clip.isPinned) "📌 " else "") + clip.text.take(90)
+                val card = TextView(this).apply {
+                    text = (if (clip.isPinned) "📌 " else "") + clip.text.take(110)
                     setTextColor(theme.keyTextColor)
-                    textSize = 14f
-                    setPadding(16, 18, 16, 18)
+                    textSize = 13.5f
+                    background = createRoundedCard(theme.keyColor, 12f, theme.popupBorderColor)
+                    setPadding((14 * d).toInt(), (11 * d).toInt(), (14 * d).toInt(), (11 * d).toInt())
+                    val lp = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                    lp.bottomMargin = (7 * d).toInt()
+                    layoutParams = lp
                     setOnClickListener {
                         currentInputConnection?.commitText(clip.text, 1)
                         closeSecondaryPanel()
@@ -651,14 +700,9 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
                         true
                     }
                 }
-                list.addView(row)
+                list.addView(card)
             }
         }
-        val backBtn = Button(this).apply {
-            text = "Cerrar Portapapeles"
-            setOnClickListener { closeSecondaryPanel() }
-        }
-        list.addView(backBtn)
         panel.addView(ScrollView(this).apply { addView(list) })
     }
 
@@ -672,62 +716,80 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
         panel.tag = "ai"
         panel.visibility = View.VISIBLE
         keyboardView?.visibility = View.GONE
+        toolbarView?.setActiveAction(OneUiToolbarView.Action.GALAXY_AI)
 
         val theme = resolveTheme()
+        val d = resources.displayMetrics.density
+        panel.addView(createPanelHeader("✨ Galaxy AI • Asistente de Escritura (Gemini)", theme))
+
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(16, 12, 16, 12)
+            setPadding((12 * d).toInt(), (4 * d).toInt(), (12 * d).toInt(), (12 * d).toInt())
         }
 
         val statusView = TextView(this).apply {
-            text = "✨ Gemini Writing Assist (S22 Ultra)"
-            setTextColor(theme.keyTextColor)
-            textSize = 14f
-            setPadding(8, 8, 8, 12)
+            text = "Selecciona una acción para transformar el texto que estás escribiendo:"
+            setTextColor(theme.altTextColor)
+            textSize = 12.5f
+            setPadding((4 * d).toInt(), 0, (4 * d).toInt(), (8 * d).toInt())
         }
         container.addView(statusView)
 
         val actions = listOf(
-            "Corregir ortografía y gramática" to WritingAction.FIX_GRAMMAR,
-            "Tono Profesional" to WritingAction.TONE_PROFESSIONAL,
-            "Tono Casual" to WritingAction.TONE_CASUAL,
-            "Tono Redes Sociales" to WritingAction.TONE_SOCIAL,
-            "Traducir a Inglés" to WritingAction.TRANSLATE_TO_EN,
-            "Traducir a Español" to WritingAction.TRANSLATE_TO_ES
+            "✓  Ortografía y gramática" to WritingAction.FIX_GRAMMAR,
+            "👔  Tono Profesional" to WritingAction.TONE_PROFESSIONAL,
+            "😊  Tono Casual y Cercano" to WritingAction.TONE_CASUAL,
+            "🔥  Tono para Redes Sociales" to WritingAction.TONE_SOCIAL,
+            "🇺🇸  Traducir al Inglés" to WritingAction.TRANSLATE_TO_EN,
+            "🇪🇸  Traducir al Español" to WritingAction.TRANSLATE_TO_ES
         )
 
-        for ((title, action) in actions) {
-            val btn = Button(this).apply {
-                text = title
-                setOnClickListener {
-                    val ic = currentInputConnection ?: return@setOnClickListener
-                    val textBefore = ic.getTextBeforeCursor(500, 0)?.toString().orEmpty()
-                    if (textBefore.isBlank()) {
-                        statusView.text = "Escribe algo primero para procesarlo con Gemini."
-                        return@setOnClickListener
-                    }
-                    statusView.text = "Procesando con Gemini..."
-                    serviceScope.launch {
-                        when (val res = geminiAssistant.transformText(prefs.geminiApiKey, textBefore, action)) {
-                            is AiResult.Success -> {
-                                ic.deleteSurroundingText(textBefore.length, 0)
-                                ic.commitText(res.text, 1)
-                                closeSecondaryPanel()
-                            }
-                            is AiResult.Error -> {
-                                statusView.text = res.message
+        for (pair in actions.chunked(2)) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            for ((title, action) in pair) {
+                val pill = TextView(this).apply {
+                    text = title
+                    textSize = 13f
+                    gravity = Gravity.CENTER
+                    setTextColor(theme.keyTextColor)
+                    background = createRoundedCard(theme.keyColor, 12f, theme.popupBorderColor)
+                    setPadding((10 * d).toInt(), (12 * d).toInt(), (10 * d).toInt(), (12 * d).toInt())
+                    val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    lp.setMargins((4 * d).toInt(), (4 * d).toInt(), (4 * d).toInt(), (4 * d).toInt())
+                    layoutParams = lp
+                    setOnClickListener {
+                        val ic = currentInputConnection ?: return@setOnClickListener
+                        val textBefore = ic.getTextBeforeCursor(500, 0)?.toString().orEmpty()
+                        if (textBefore.isBlank()) {
+                            statusView.text = "⚠️ Escribe una frase primero para que Galaxy AI la procese."
+                            return@setOnClickListener
+                        }
+                        statusView.text = "✨ Procesando con Gemini AI..."
+                        serviceScope.launch {
+                            when (val res = geminiAssistant.transformText(prefs.geminiApiKey, textBefore, action)) {
+                                is AiResult.Success -> {
+                                    ic.deleteSurroundingText(textBefore.length, 0)
+                                    ic.commitText(res.text, 1)
+                                    closeSecondaryPanel()
+                                }
+                                is AiResult.Error -> {
+                                    statusView.text = res.message
+                                }
                             }
                         }
                     }
                 }
+                row.addView(pill)
             }
-            container.addView(btn)
+            container.addView(row)
         }
 
-        container.addView(Button(this).apply {
-            text = "Volver al teclado"
-            setOnClickListener { closeSecondaryPanel() }
-        })
         panel.addView(ScrollView(this).apply { addView(container) })
     }
 
@@ -737,6 +799,7 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
             visibility = View.GONE
             tag = null
         }
+        toolbarView?.setActiveAction(null)
         keyboardView?.visibility = View.VISIBLE
     }
 
@@ -749,7 +812,7 @@ class OpenKeyboardSamService : InputMethodService(), OneUiKeyboardView.Listener 
             }
             startActivity(intent)
         }.onFailure {
-            Toast.makeText(this, "Entrada de voz no disponible en este dispositivo", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Entrada de voz no disponible", Toast.LENGTH_SHORT).show()
         }
     }
 

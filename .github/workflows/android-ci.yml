@@ -33,28 +33,27 @@ jobs:
       - name: Build Debug & Release APKs
         run: |
           ./gradlew assembleDebug assembleRelease --stacktrace
-          cp app/build/outputs/apk/release/app-release.apk OpenKeyboardSam-v0.2.0-release.apk
-          cp app/build/outputs/apk/debug/app-debug.apk OpenKeyboardSam-v0.2.0-debug.apk
+          cp app/build/outputs/apk/release/app-release.apk OpenKeyboardSam-v0.3.0-release.apk
+          cp app/build/outputs/apk/debug/app-debug.apk OpenKeyboardSam-v0.3.0-debug.apk
 
       - name: Upload APKs as Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: OpenKeyboardSam-APKs
-          path: OpenKeyboardSam-v0.2.0-*.apk
+          path: OpenKeyboardSam-v0.3.0-*.apk
 
       - name: Publish GitHub Release
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete v0.2.0 --yes --cleanup-tag || true
-          gh release create v0.2.0 \
-            OpenKeyboardSam-v0.2.0-release.apk \
-            OpenKeyboardSam-v0.2.0-debug.apk \
-            --title "OpenKeyboardSam v0.2.0 (One UI S22 Ultra Edition)" \
-            --notes "### OpenKeyboardSam v0.2.0 — Ultra-Low RAM One UI Keyboard (2.6 MB Release APK vs 132 MB Samsung Honeyboard)
-          - **APK Release ultraligero (2.6 MB):** Optimizado con R8 + motor nativo C++17 (mmap).
-          - **Tira emergente interactiva de acentos:** Manten pulsada cualquier tecla y desliza para elegir acentos o simbolos.
-          - **Panel interactivo S Pen:** Lienzo sensible a la presion para Galaxy S22 Ultra con gestos rapidos.
-          - **Modo Keys Cafe y Una Mano:** Control deslizante de altura (80%-130%), modo a una mano y modo compacto Samsung DeX.
-          - **Monitor de RAM PSS en vivo** en Ajustes + **Gemini AI Writing Assist** + **Samsung Pass Autofill Inline**."
+          gh release delete v0.3.0 --yes --cleanup-tag || true
+          gh release create v0.3.0 \
+            OpenKeyboardSam-v0.3.0-release.apk \
+            OpenKeyboardSam-v0.3.0-debug.apk \
+            --title "OpenKeyboardSam v0.3.0 (Authentic One UI 6.1 Visual Edition)" \
+            --notes "### OpenKeyboardSam v0.3.0 — Clona el look exacto del Teclado Samsung One UI 6.1 (Galaxy S22 Ultra)
+          - **Iconografia Vectorial Nativa One UI:** Nuevos iconos vectoriales precisos en Canvas para Shift (normal/activo/CapsLock), Backspace, Enter, Globo de idioma y toda la barra superior (Galaxy AI ✨, Emoji, Portapapeles, S Pen, Voz, Una Mano y Ajustes).
+          - **Proporciones y Colores Exactos de Samsung Honeyboard:** Fila numerica superior compacta, sangrado lateral automatico en la fila A-L en ingles, barra espaciadora con chevrons (< Español(ES) >) y paleta exacta One UI Claro (#E5E7EC / #FFFFFF) y Oscuro (#17171A / #2C2C30).
+          - **Barra de Prediccion de 3 Columnas con Divisores:** Sugerencia central destacada en azul One UI y divisores verticales finos igual que el teclado original.
+          - **Paneles y Ajustes con Tarjetas Redondeadas One UI:** Pantallas de Ajustes, Portapapeles, S Pen y Galaxy AI rediseñadas con tarjetas agrupadas estilo One UI 6.1."
