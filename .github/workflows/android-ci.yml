@@ -41,3 +41,20 @@ jobs:
         with:
           name: OpenKeyboardSam-APKs
           path: OpenKeyboardSam-v0.2.0-*.apk
+
+      - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete v0.2.0 --yes --cleanup-tag || true
+          gh release create v0.2.0 \
+            OpenKeyboardSam-v0.2.0-release.apk \
+            OpenKeyboardSam-v0.2.0-debug.apk \
+            --title "OpenKeyboardSam v0.2.0 (One UI S22 Ultra Edition)" \
+            --notes "### OpenKeyboardSam v0.2.0 — Ultra-Low RAM One UI Keyboard (2.6 MB Release APK vs 132 MB Samsung Honeyboard)
+          - **APK Release ultraligero (2.6 MB):** Optimizado con R8 + motor nativo C++17 (mmap).
+          - **Tira emergente interactiva de acentos:** Manten pulsada cualquier tecla y desliza para elegir acentos o simbolos.
+          - **Panel interactivo S Pen:** Lienzo sensible a la presion para Galaxy S22 Ultra con gestos rapidos.
+          - **Modo Keys Cafe y Una Mano:** Control deslizante de altura (80%-130%), modo a una mano y modo compacto Samsung DeX.
+          - **Monitor de RAM PSS en vivo** en Ajustes + **Gemini AI Writing Assist** + **Samsung Pass Autofill Inline**."
