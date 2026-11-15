@@ -3,6 +3,7 @@ package com.openkeyboardsam.prefs
 import android.content.Context
 import android.content.SharedPreferences
 import com.openkeyboardsam.core.keyboard.model.KeyboardLanguage
+import com.openkeyboardsam.core.keyboard.model.LayoutSizingMode
 
 enum class ThemeMode(val id: String) {
     AUTO_SYSTEM("auto"),
@@ -43,6 +44,25 @@ class KeyboardPreferences(context: Context) {
         get() = prefs.getBoolean(KEY_SWIPE, true)
         set(value) = prefs.edit().putBoolean(KEY_SWIPE, value).apply()
 
+    var doubleSpacePeriod: Boolean
+        get() = prefs.getBoolean(KEY_DOUBLE_SPACE, true)
+        set(value) = prefs.edit().putBoolean(KEY_DOUBLE_SPACE, value).apply()
+
+    var autoCapitalize: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_CAP, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_CAP, value).apply()
+
+    var keyboardHeightScale: Float
+        get() = prefs.getFloat(KEY_HEIGHT_SCALE, 1.0f).coerceIn(0.80f, 1.30f)
+        set(value) = prefs.edit().putFloat(KEY_HEIGHT_SCALE, value.coerceIn(0.80f, 1.30f)).apply()
+
+    var layoutSizingMode: LayoutSizingMode
+        get() {
+            val name = prefs.getString(KEY_SIZING_MODE, LayoutSizingMode.FULL.name)
+            return LayoutSizingMode.entries.firstOrNull { it.name == name } ?: LayoutSizingMode.FULL
+        }
+        set(value) = prefs.edit().putString(KEY_SIZING_MODE, value.name).apply()
+
     var geminiApiKey: String
         get() = prefs.getString(KEY_GEMINI_API, "") ?: ""
         set(value) = prefs.edit().putString(KEY_GEMINI_API, value.trim()).apply()
@@ -54,6 +74,10 @@ class KeyboardPreferences(context: Context) {
         private const val KEY_ALT_LABELS = "alt_labels"
         private const val KEY_HAPTIC = "haptic"
         private const val KEY_SWIPE = "swipe_typing"
+        private const val KEY_DOUBLE_SPACE = "double_space_period"
+        private const val KEY_AUTO_CAP = "auto_cap"
+        private const val KEY_HEIGHT_SCALE = "height_scale"
+        private const val KEY_SIZING_MODE = "sizing_mode"
         private const val KEY_GEMINI_API = "gemini_api_key"
     }
 }

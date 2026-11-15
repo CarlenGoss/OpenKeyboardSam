@@ -19,12 +19,14 @@ import android.view.ViewConfiguration
 import com.openkeyboardsam.core.keyboard.model.KeyCode
 import com.openkeyboardsam.core.keyboard.model.KeySpec
 import com.openkeyboardsam.core.keyboard.model.KeyboardTheme
+import com.openkeyboardsam.core.keyboard.model.LayoutSizingMode
 import com.openkeyboardsam.core.keyboard.model.ShiftState
 import kotlin.math.abs
 
 /**
  * High-speed, zero-allocation Canvas-based keyboard view styled after Samsung One UI.
- * Avoids heavy View hierarchies to keep RAM usage minimal and frame times < 8ms.
+ * Supports Keys Cafe height scaling, One-Handed / DeX compact modes, interactive
+ * multi-character long-press popup Strip, double-space period, and S22 Ultra linear haptics.
  */
 class OneUiKeyboardView @JvmOverloads constructor(
     context: Context,
@@ -51,6 +53,20 @@ class OneUiKeyboardView @JvmOverloads constructor(
     var showAltLabels: Boolean = true
     var swipeTypingEnabled: Boolean = true
 
+    var heightScale: Float = 1.0f
+        set(value) {
+            field = value.coerceIn(0.80f, 1.30f)
+            requestLayout()
+            invalidate()
+        }
+
+    var sizingMode: LayoutSizingMode = LayoutSizingMode.FULL
+        set(value) {
+            field = value
+            recomputeKeyRects(width, height)
+            invalidate()
+        }
+
     private var theme: KeyboardTheme = KeyboardTheme.oneUiLight()
     private var rows: List<List<KeySpec>> = emptyList()
     private var shiftState: ShiftState = ShiftState.OFF
@@ -74,13 +90,14 @@ class OneUiKeyboardView @JvmOverloads constructor(
         strokeJoin = Paint.Join.ROUND
     }
     private val popupPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val popupHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val swipePath = Path()
 
     private val density = resources.displayMetrics.density
-    private val keyCornerRadius = 6.5f * density
+    private val keyCornerRadius = 7.0f * density
     private val keyGapX = 4.5f * density
-    private val keyGapY = 7.5f * density
-    private val rowHeightPx = 50f * density
+    private val keyGapY = 7.0f * density
+    private val baseRowHeightPx = 50f * density
     private val paddingTopPx = 6f * density
     private val paddingBottomPx = 8f * density
     private val paddingSidePx = 4f * density
@@ -94,6 +111,9 @@ class OneUiKeyboardView @JvmOverloads constructor(
     private var isSpaceSwiping = false
     private var isSwipeGesture = false
     private var isLongPressed = false
+    private var popupOptions: List<String> = emptyList()
+    private var selectedPopupIndex: Int = 0
+    private val popupBounds = RectF()
     private val swipedKeys = mutableListOf<KeySpec>()
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -125,10 +145,9 @@ class OneUiKeyboardView @JvmOverloads constructor(
         if (!isSpaceSwiping && !isSwipeGesture) {
             isLongPressed = true
             performHapticClick()
-            val alt = current.key.longPressChars.firstOrNull()
-            if (alt != null) {
-                listener?.onTextInput(alt)
-                activeKey = null
+            if (current.key.longPressChars.isNotEmpty()) {
+                popupOptions = current.key.longPressChars
+                selectedPopupIndex = 0
                 invalidate()
             } else if (current.key.isRepeatable) {
                 mainHandler.post(repeatRunnable)
@@ -160,13 +179,15 @@ class OneUiKeyboardView @JvmOverloads constructor(
         swipePaint.color = theme.swipeTrailColor
         swipePaint.strokeWidth = 4.5f * density
         popupPaint.color = theme.popupBgColor
+        popupHighlightPaint.color = theme.accentKeyColor
         invalidate()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        val desiredHeight = (rows.size * rowHeightPx + paddingTopPx + paddingBottomPx).toInt()
-            .coerceAtLeast((210 * density).toInt())
+        val scaledRowH = baseRowHeightPx * heightScale
+        val desiredHeight = (rows.size * scaledRowH + paddingTopPx + paddingBottomPx).toInt()
+            .coerceAtLeast((180 * density).toInt())
         setMeasuredDimension(width, desiredHeight)
     }
 
@@ -179,9 +200,13 @@ class OneUiKeyboardView @JvmOverloads constructor(
         keyRects.clear()
         if (totalWidth <= 0 || rows.isEmpty()) return
 
-        val usableWidth = totalWidth - paddingSidePx * 2f
+        val effectiveWidth = totalWidth * sizingMode.scaleWidth
+        val startOffsetX = if (sizingMode.alignRight) totalWidth - effectiveWidth else 0f
+
+        val usableWidth = effectiveWidth - paddingSidePx * 2f
         val rowCount = rows.size
-        val availableHeight = (totalHeight - paddingTopPx - paddingBottomPx).coerceAtLeast(rowCount * rowHeightPx)
+        val scaledRowH = baseRowHeightPx * heightScale
+        val availableHeight = (totalHeight - paddingTopPx - paddingBottomPx).coerceAtLeast(rowCount * scaledRowH)
         val actualRowHeight = availableHeight / rowCount
 
         for (rIndex in rows.indices) {
@@ -190,7 +215,7 @@ class OneUiKeyboardView @JvmOverloads constructor(
             val totalGaps = (row.size - 1) * keyGapX
             val unitWidth = (usableWidth - totalGaps) / totalWeight
 
-            var currentX = paddingSidePx
+            var currentX = startOffsetX + paddingSidePx
             val top = paddingTopPx + rIndex * actualRowHeight + keyGapY * 0.5f
             val bottom = paddingTopPx + (rIndex + 1) * actualRowHeight - keyGapY * 0.5f
 
@@ -214,7 +239,6 @@ class OneUiKeyboardView @JvmOverloads constructor(
             val rect = item.rect
             val isPressed = activeKey == item
 
-            // Subtle One UI key shadow
             canvas.drawRoundRect(
                 rect.left,
                 rect.top + 1.2f * density,
@@ -233,13 +257,11 @@ class OneUiKeyboardView @JvmOverloads constructor(
             }
             canvas.drawRoundRect(rect, keyCornerRadius, keyCornerRadius, keyPaint)
 
-            // Main label
             textPaint.color = if (key.isAccent) 0xFFFFFFFF.toInt() else theme.keyTextColor
             val displayLabel = formatLabel(key)
             val textY = rect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f
             canvas.drawText(displayLabel, rect.centerX(), textY, textPaint)
 
-            // Top-right alternative character hint (One UI signature look)
             if (showAltLabels && key.altLabel != null) {
                 altTextPaint.color = theme.altTextColor
                 canvas.drawText(
@@ -251,31 +273,72 @@ class OneUiKeyboardView @JvmOverloads constructor(
             }
         }
 
-        // Draw active key popup preview
         val pressed = activeKey
-        if (pressed != null && !pressed.key.isFunctional && pressed.key.code != KeyCode.SPACE && !isSwipeGesture) {
-            val r = pressed.rect
-            val popW = r.width() * 1.2f
-            val popH = r.height() * 1.15f
-            val popLeft = (r.centerX() - popW / 2f).coerceIn(2f, width - popW - 2f)
-            val popTop = (r.top - popH - 6f * density).coerceAtLeast(2f)
-            canvas.drawRoundRect(
-                popLeft, popTop, popLeft + popW, popTop + popH,
-                keyCornerRadius * 1.3f, keyCornerRadius * 1.3f, shadowPaint
-            )
-            canvas.drawRoundRect(
-                popLeft, popTop, popLeft + popW, popTop + popH,
-                keyCornerRadius * 1.3f, keyCornerRadius * 1.3f, popupPaint
-            )
-            textPaint.color = theme.keyTextColor
-            textPaint.textSize = 24f * density
-            val popTextY = popTop + popH / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
-            canvas.drawText(formatLabel(pressed.key), popLeft + popW / 2f, popTextY, textPaint)
+        if (pressed != null && !isSwipeGesture) {
+            if (isLongPressed && popupOptions.isNotEmpty()) {
+                drawMultiCharPopup(canvas, pressed)
+            } else if (!pressed.key.isFunctional && pressed.key.code != KeyCode.SPACE) {
+                drawSingleKeyPopup(canvas, pressed)
+            }
         }
 
-        // Draw swipe trail
         if (isSwipeGesture && !swipePath.isEmpty) {
             canvas.drawPath(swipePath, swipePaint)
+        }
+    }
+
+    private fun drawSingleKeyPopup(canvas: Canvas, pressed: KeyRect) {
+        val r = pressed.rect
+        val popW = r.width() * 1.22f
+        val popH = r.height() * 1.15f
+        val popLeft = (r.centerX() - popW / 2f).coerceIn(2f, width - popW - 2f)
+        val popTop = (r.top - popH - 6f * density).coerceAtLeast(2f)
+        canvas.drawRoundRect(
+            popLeft, popTop, popLeft + popW, popTop + popH,
+            keyCornerRadius * 1.3f, keyCornerRadius * 1.3f, shadowPaint
+        )
+        canvas.drawRoundRect(
+            popLeft, popTop, popLeft + popW, popTop + popH,
+            keyCornerRadius * 1.3f, keyCornerRadius * 1.3f, popupPaint
+        )
+        textPaint.color = theme.keyTextColor
+        textPaint.textSize = 24f * density
+        val popTextY = popTop + popH / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
+        canvas.drawText(formatLabel(pressed.key), popLeft + popW / 2f, popTextY, textPaint)
+    }
+
+    private fun drawMultiCharPopup(canvas: Canvas, pressed: KeyRect) {
+        val r = pressed.rect
+        val cellW = 36f * density
+        val popW = cellW * popupOptions.size
+        val popH = r.height() * 1.15f
+        val popLeft = (r.centerX() - popW / 2f).coerceIn(4f * density, width - popW - 4f * density)
+        val popTop = (r.top - popH - 8f * density).coerceAtLeast(2f)
+        popupBounds.set(popLeft, popTop, popLeft + popW, popTop + popH)
+
+        canvas.drawRoundRect(popupBounds, keyCornerRadius * 1.4f, keyCornerRadius * 1.4f, shadowPaint)
+        canvas.drawRoundRect(popupBounds, keyCornerRadius * 1.4f, keyCornerRadius * 1.4f, popupPaint)
+
+        textPaint.textSize = 18f * density
+        for (i in popupOptions.indices) {
+            val cellLeft = popLeft + i * cellW
+            if (i == selectedPopupIndex) {
+                canvas.drawRoundRect(
+                    cellLeft + 2f * density,
+                    popTop + 2f * density,
+                    cellLeft + cellW - 2f * density,
+                    popTop + popH - 2f * density,
+                    keyCornerRadius,
+                    keyCornerRadius,
+                    popupHighlightPaint
+                )
+                textPaint.color = 0xFFFFFFFF.toInt()
+            } else {
+                textPaint.color = theme.keyTextColor
+            }
+            val ch = if (shiftState != ShiftState.OFF) popupOptions[i].uppercase() else popupOptions[i]
+            val ty = popTop + popH / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
+            canvas.drawText(ch, cellLeft + cellW / 2f, ty, textPaint)
         }
     }
 
@@ -306,6 +369,8 @@ class OneUiKeyboardView @JvmOverloads constructor(
                 isSpaceSwiping = false
                 isSwipeGesture = false
                 isLongPressed = false
+                popupOptions = emptyList()
+                selectedPopupIndex = 0
                 swipedKeys.clear()
                 swipePath.reset()
 
@@ -325,6 +390,19 @@ class OneUiKeyboardView @JvmOverloads constructor(
 
             MotionEvent.ACTION_MOVE -> {
                 val initial = activeKey
+                // Interactive drag across long-press popup options
+                if (isLongPressed && popupOptions.isNotEmpty() && popupBounds.width() > 0) {
+                    val relX = (x - popupBounds.left).coerceIn(0f, popupBounds.width() - 1f)
+                    val cellW = popupBounds.width() / popupOptions.size
+                    val newIdx = (relX / cellW).toInt().coerceIn(0, popupOptions.lastIndex)
+                    if (newIdx != selectedPopupIndex) {
+                        selectedPopupIndex = newIdx
+                        performHapticTick()
+                        invalidate()
+                    }
+                    return true
+                }
+
                 if (initial != null && initial.key.code == KeyCode.SPACE) {
                     val dx = x - lastSpaceX
                     val step = 18f * density
@@ -370,7 +448,18 @@ class OneUiKeyboardView @JvmOverloads constructor(
 
             MotionEvent.ACTION_UP -> {
                 cancelPendingCallbacks()
-                if (isSwipeGesture && swipedKeys.size >= 2) {
+                if (isLongPressed && popupOptions.isNotEmpty()) {
+                    val raw = popupOptions[selectedPopupIndex.coerceIn(0, popupOptions.lastIndex)]
+                    val chosen = if (shiftState != ShiftState.OFF && raw.length == 1 && raw[0].isLetter()) {
+                        raw.uppercase()
+                    } else {
+                        raw
+                    }
+                    listener?.onTextInput(chosen)
+                    if (shiftState == ShiftState.ON) {
+                        shiftState = ShiftState.OFF
+                    }
+                } else if (isSwipeGesture && swipedKeys.size >= 2) {
                     listener?.onSwipeWord(swipedKeys.toList())
                 } else if (!isSpaceSwiping && !isLongPressed) {
                     val hit = findKeyAt(x, y) ?: activeKey
@@ -410,6 +499,8 @@ class OneUiKeyboardView @JvmOverloads constructor(
         isSpaceSwiping = false
         isSwipeGesture = false
         isLongPressed = false
+        popupOptions = emptyList()
+        selectedPopupIndex = 0
         swipedKeys.clear()
         swipePath.reset()
     }
